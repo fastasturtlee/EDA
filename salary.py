@@ -1,52 +1,76 @@
 import streamlit as st
 from streamlit_option_menu import option_menu
-from pandas import DataFrame
+from pandas import DataFrame,read_csv
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import OneHotEncoder,MinMaxScaler
-from pandas import concat
-import keras as keras
-from joblib import load
+from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OneHotEncoder, MinMaxScaler
+from sklearn.decomposition import PCA
+from keras.models import Sequential
+from keras.layers import Dense
 
-encoder = load("encoder.pkl")
-pca = load("pca_model.pkl")
+
+salary_data = read_csv('content/salary.csv')
+
+null_indices = salary_data[salary_data.isnull().any(axis=1)].index.tolist()
+
+salary_data = salary_data.drop(index=null_indices,axis=1)
+
+target_salary_data = salary_data['Salary']
+salary_data = salary_data.drop(columns=['Salary'],axis=1)
+
+def build_model(input_dim):
+    model = Sequential()
+    model.add(Dense(147, activation='relu', input_dim=input_dim))
+    model.add(Dense(45, activation='relu'))
+    model.add(Dense(6, activation='relu'))
+    model.add(Dense(1, activation='relu'))
+    model.compile(optimizer='adam', loss='huber', metrics=['mae'])
+    return model
+
+class TrainAndEvaluate(BaseEstimator, TransformerMixin):
+    def __init__(self, model_builder, test_size=0.2, random_state=42):
+        self.model_builder = model_builder
+        self.test_size = test_size
+        self.random_state = random_state
+
+    def fit(self, salary_data, target_salary_data):
+        self.train_salary_data, self.test_salary_data, self.train_target_salary_data, self.test_target_salary_data = train_test_split(
+            salary_data, target_salary_data, test_size=self.test_size, random_state=self.random_state
+        )
+        self.model = self.model_builder(salary_data.shape[1])
+        self.model.fit(self.train_salary_data, self.train_target_salary_data, epochs=100, batch_size=32, verbose=0)
+        return self
+
+    def predict(self, X=None):
+        if X is None:
+            return self.model.predict(self.test_salary_data)
+        return self.model.predict(X)
+
+    def score(self, X=None, y=None):
+        if X is None or y is None:
+            X, y = self.test_salary_data, self.test_target_salary_data
+        return self.model.evaluate(X, y, verbose=0)[1]
+
+categorical_cols = ["Education Level", "Job Title", "Gender"]
+numerical_cols = ["Age", "Years of Experience"]
+
+preprocessor = ColumnTransformer([
+    ("num", MinMaxScaler(), numerical_cols),
+    ("cat", OneHotEncoder(handle_unknown='ignore', sparse_output=False), categorical_cols)
+])
+
+pipeline = Pipeline([
+    ("preprocessing", preprocessor),
+    ("pca", PCA(n_components=0.95)),
+    ("model_trainer", TrainAndEvaluate(build_model))
+])
 
 
-def prepare_input_for_prediction(
-    experience: float,
-    age: str,
-    education: str,
-    job_title: str,
-    gender: str
-):
-    
-    scaler = MinMaxScaler()
-    user_input = {
-        "Years of Experience": experience,
-        "Age": age,
-        "Education Level": education,
-        "Job Title": job_title,
-        "Gender": gender
-    }
-    input_df = DataFrame([user_input])
-
-    category_columns = ["Age", "Education Level", "Job Title","Gender"]
-    numeric_columns = ["Years of Experience"]
-
-    encoded_array = encoder.transform(input_df[category_columns])
-    
-    encoded_col_names = encoder.get_feature_names_out()
-
-    print(encoded_col_names)
-
-    encoded_df = DataFrame(encoded_array, columns=encoded_col_names)
-
-    final_df = concat([input_df[numeric_columns].reset_index(drop=True), encoded_df], axis=1)
-
-    final_scaled = scaler.fit_transform(final_df)
-
-    final_pca = pca.transform(final_scaled)
-
-    return final_pca
+pipeline.fit(salary_data, target_salary_data)
 
 with st.sidebar:
     selected = option_menu(
@@ -71,7 +95,8 @@ if selected == "Model Description":
     """)
 
 elif selected == "Model Execution":
-    gender_options = ["Male", "Female"]
+    pass
+gender_options = ["Male", "Female"]
 
 age_options = [str(i) for i in range(23, 54)]
 
@@ -154,13 +179,12 @@ with st.form("input_form"):
 if submit_btn:
     st.success("✅ Form submitted successfully!")
 
-    model = keras.models.load_model("salary_model.keras")
 
     data = prepare_input_for_prediction(experience,age,education,job_title,gender)
 
-    scaler = load("arget_salary_scaler.pkl")
+    print(data)
     prediction = model.predict(data)
-    prediction = scaler.inverse_transform(prediction.reshape(-1, 1))
+    prediction = target_scaler.inverse_transform(prediction.reshape(-1, 1))
 
     st.markdown(f"""
     **Your Input Summary:**
